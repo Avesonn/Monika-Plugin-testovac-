@@ -88,7 +88,6 @@ COUNTRIES = {
 }
 
 # --- MAPOVÁNÍ API SLUŽEB NA GEOROUTING KÓDY ---
-# Naplněno dle poskytnutých screenshotů z interních systémů DPD
 SERVICE_GEO_MAPPING = {
     "CLASSIC": "101",
     "PRIVATE": "327",
@@ -101,8 +100,8 @@ SERVICE_GEO_MAPPING = {
     "SHOP_TO_SHOP": "345",
     "SHOP_TO_HOME": "404",
     "RETURN": "332",
-    "COLLECTION_IMPORT": "XXX", # Doplňte přesný kód, pokud existuje
-    "THIRDPARTY_COLLECTION": "XXX" # Doplňte přesný kód, pokud existuje
+    "COLLECTION_IMPORT": "XXX",
+    "THIRDPARTY_COLLECTION": "XXX"
 }
 
 # --- BEZPEČNÁ INICIALIZACE SESSION STATE ---
@@ -129,7 +128,7 @@ for key, default_value in session_defaults.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
 
-# --- GEOROUTING LOADER (Cachovaný pro bleskovou rychlost) ---
+# --- GEOROUTING LOADER ---
 @st.cache_data(show_spinner="Zpracovávám lokální georouting soubor. To může chvíli trvat...")
 def load_georouting_data(file_path):
     allowso_list = []
@@ -298,12 +297,12 @@ menu_selection = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-# Zobrazení stavu Georouting souboru pro Moniku
+# OPRAVENO: Bezpečný jednorádkový string
 if df_allowso.empty:
     st.sidebar.warning("⚠️ Georouting soubor nebyl nalezen. Filtry služeb jsou vypnuté.")
 else:
-    st.sidebar.success(f"✅ Georouting aktivní
-({len(df_allowso)} povolených směrů)")
+    msg = f"✅ Georouting aktivní ({len(df_allowso)} povolených směrů)"
+    st.sidebar.success(msg)
 
 st.sidebar.markdown("### 🛠️ Vývojářské nástroje")
 mock_parcel_num = st.sidebar.text_input("Zadejte vlastní číslo zásilky:")
@@ -422,7 +421,6 @@ if menu_selection == "📦 Vytvoření zásilky":
             "THIRDPARTY_COLLECTION": "Svoz třetí straně"
         }
         
-        # FILTRACE SLUŽEB PODLE LOKÁLNÍHO GEOROUTINGU (CZ -> DESTINACE)
         available_services = {}
         for service_key, service_label in all_service_options.items():
             geo_code = SERVICE_GEO_MAPPING.get(service_key, "XXX")
@@ -431,11 +429,8 @@ if menu_selection == "📦 Vytvoření zásilky":
                 # Pokud georouting chybí, nepovolíme žádnou službu kromě těch, které by mohly být natvrdo
                 pass
             elif geo_code == "XXX":
-                # Pokud služba nemá známý kód, prozatím ji nepovolíme (striktní mód)
-                # available_services[service_key] = service_label + " (Neprošlo Geo)" # Volitelně můžeme přidat označení
                 pass
             else:
-                # Kontrola, zda existuje povolení odeslat tento kód z CZ do vybraného státu
                 is_allowed = df_allowso[
                     (df_allowso['RULESERVICE'].astype(str) == geo_code) & 
                     (df_allowso['ZONETO'].str.upper() == dest_country_code.upper()) &
@@ -450,7 +445,6 @@ if menu_selection == "📦 Vytvoření zásilky":
             
         service_type = st.radio("Dostupné produkty pro vybraný stát:", options=list(available_services.keys()), format_func=lambda x: available_services[x], horizontal=True)
         
-        # Vytažení limitů z P0PROPERTIES pro zvolenou službu
         current_geo_code = SERVICE_GEO_MAPPING.get(service_type, "XXX")
         if not df_p0properties.empty and current_geo_code != "XXX":
             props = df_p0properties[
@@ -463,7 +457,6 @@ if menu_selection == "📦 Vytvoření zásilky":
                 display_df = props[['PROPERTY', 'VALUE']].reset_index(drop=True)
                 st.dataframe(display_df, use_container_width=True)
         
-        # Logika toků dat
         if service_type in ["RETURN", "COLLECTION_IMPORT"]:
             is_reverse_flow = True
         else:
@@ -560,7 +553,6 @@ if menu_selection == "📦 Vytvoření zásilky":
     # --- ODESLÁNÍ DO API ---
     if st.button("🚀 Odeslat a vytvořit zásilku v DPD", type="primary", use_container_width=True):
         
-        # Vyčištění předchozích session proměnných
         st.session_state.pdf_bytes = None
         st.session_state.parcel_number = ""
         st.session_state.dropoff_pin = ""
@@ -574,7 +566,6 @@ if menu_selection == "📦 Vytvoření zásilky":
             st.error("Musíte vyplnit ID výdejního místa z mapy!")
             st.stop()
             
-        # Určení měny
         currency = "EUR"
         if dest_country_code == "CZ": 
             currency = "CZK"
@@ -583,7 +574,6 @@ if menu_selection == "📦 Vytvoření zásilky":
         elif dest_country_code == "RO": 
             currency = "RON"
 
-        # Typ shipmentu
         current_shipment_type = "Standard"
         if service_type == "RETURN": 
             current_shipment_type = "Return"
@@ -631,7 +621,7 @@ if menu_selection == "📦 Vytvoření zásilky":
             "references": {
                 "ref1": ref_shipment
             }, 
-            "parels": parcels_list, 
+            "parcels": parcels_list, 
             "services": {}
         }]
         
