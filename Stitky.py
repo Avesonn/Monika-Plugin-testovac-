@@ -100,8 +100,8 @@ SERVICE_GEO_MAPPING = {
     "SHOP_TO_SHOP": "345",
     "SHOP_TO_HOME": "404",
     "RETURN": "332",
-    "COLLECTION_IMPORT": "XXX",
-    "THIRDPARTY_COLLECTION": "XXX"
+    "COLLECTION_IMPORT": "XXX", 
+    "THIRDPARTY_COLLECTION": "XXX" 
 }
 
 # --- BEZPEČNÁ INICIALIZACE SESSION STATE ---
@@ -143,17 +143,18 @@ def load_georouting_data(file_path):
                 parts = line.strip().split(';')
                 if len(parts) >= 5:
                     allowso_list.append({
-                        "RULEFROM": parts[1].strip(),
-                        "RULESERVICE": parts[2].strip(),
-                        "ZONETO": parts[4].strip()
+                        "RULEFROM": parts[1].strip(),   # Dle ukázky zde bude B002
+                        "RULESERVICE": parts[2].strip(),# Např. SO101,SO105
+                        "RULETO": parts[3].strip()      # Např. CSK (nikoliv index 4 ZONETO)
                     })
             elif line.startswith("P0PROPERTIES;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 11:
                     p0_list.append({
-                        "RULEFROM": parts[2].strip(),
-                        "RULESOCODE": parts[3].strip(),
-                        "ZONETO": parts[7].strip(),
+                        "RULEFROM": parts[2].strip(),   # Bude prázdné
+                        # Očistíme případné "SO" pro čistou identifikaci kódu
+                        "RULESOCODE": parts[3].strip().replace("SO", ""), 
+                        "RULETO": parts[6].strip(),     # Např. CCH (index 6, nikoliv 7 ZONETO)
                         "PROPERTY": parts[9].strip(),
                         "VALUE": parts[10].strip()
                     })
@@ -297,7 +298,6 @@ menu_selection = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-# OPRAVENO: Bezpečný jednorádkový string
 if df_allowso.empty:
     st.sidebar.warning("⚠️ Georouting soubor nebyl nalezen. Filtry služeb jsou vypnuté.")
 else:
@@ -422,6 +422,9 @@ if menu_selection == "📦 Vytvoření zásilky":
         }
         
         available_services = {}
+        # Dle dat z txt: Cílová zóna začíná písmenem 'C' (např. CDE, CSK)
+        target_ruleto = "C" + dest_country_code.upper()
+        
         for service_key, service_label in all_service_options.items():
             geo_code = SERVICE_GEO_MAPPING.get(service_key, "XXX")
             
@@ -431,10 +434,13 @@ if menu_selection == "📦 Vytvoření zásilky":
             elif geo_code == "XXX":
                 pass
             else:
+                # V souboru je RULESERVICE zapsána např. jako "SO101,SO105"
+                target_service_str = "SO" + geo_code
+                
                 is_allowed = df_allowso[
-                    (df_allowso['RULESERVICE'].astype(str) == geo_code) & 
-                    (df_allowso['ZONETO'].str.upper() == dest_country_code.upper()) &
-                    (df_allowso['RULEFROM'].str.upper() == "CZ")
+                    (df_allowso['RULEFROM'] == 'B002') & 
+                    (df_allowso['RULETO'] == target_ruleto) &
+                    (df_allowso['RULESERVICE'].str.contains(target_service_str, na=False))
                 ]
                 if not is_allowed.empty:
                     available_services[service_key] = service_label
@@ -447,16 +453,17 @@ if menu_selection == "📦 Vytvoření zásilky":
         
         current_geo_code = SERVICE_GEO_MAPPING.get(service_type, "XXX")
         if not df_p0properties.empty and current_geo_code != "XXX":
+            # Pro parametry P0PROPERTIES: Odesílatel (RULEFROM) je prázdný, hledáme jen RULETO a kód služby
             props = df_p0properties[
-                (df_p0properties['RULESOCODE'].astype(str) == current_geo_code) & 
-                (df_p0properties['ZONETO'].str.upper() == dest_country_code.upper()) &
-                (df_p0properties['RULEFROM'].str.upper() == 'CZ')
+                (df_p0properties['RULESOCODE'] == current_geo_code) & 
+                (df_p0properties['RULETO'] == target_ruleto)
             ]
             if not props.empty:
                 st.markdown(f"**Fyzické limity a parametry (Georouting kód {current_geo_code}):**")
                 display_df = props[['PROPERTY', 'VALUE']].reset_index(drop=True)
                 st.dataframe(display_df, use_container_width=True)
         
+        # Logika toků dat
         if service_type in ["RETURN", "COLLECTION_IMPORT"]:
             is_reverse_flow = True
         else:
@@ -1122,7 +1129,7 @@ if menu_selection == "📦 Vytvoření zásilky":
             with col_search1:
                 search_service = st.text_input("Kód služby (RULESERVICE / RULESOCODE):", placeholder="např. 101, 327, 155")
             with col_search2:
-                search_zone = st.text_input("Cílová země (ZONETO):", placeholder="např. SK, DE")
+                search_zone = st.text_input("Cílová země (ZONETO/RULETO):", placeholder="např. SK, DE")
                 
             if st.button("Hledat parametry v Georoutingu", type="primary"):
                 if not search_service or not search_zone:
@@ -1131,13 +1138,17 @@ if menu_selection == "📦 Vytvoření zásilky":
                     search_service = search_service.strip().upper()
                     search_zone = search_zone.strip().upper()
                     
+                    # Formátování dotazu dle logiky DPD (přidání C k zóně a SO k servisu)
+                    search_zone_fmt = "C" + search_zone
+                    search_service_fmt = "SO" + search_service
+                    
                     st.markdown("---")
                     
                     # 1. KROK: Povolení v ALLOWSO z CZ
                     is_allowed = df_allowso[
-                        (df_allowso['RULESERVICE'].astype(str) == search_service) & 
-                        (df_allowso['ZONETO'].str.upper() == search_zone) &
-                        (df_allowso['RULEFROM'].str.upper() == "CZ")
+                        (df_allowso['RULEFROM'] == 'B002') & 
+                        (df_allowso['RULETO'] == search_zone_fmt) &
+                        (df_allowso['RULESERVICE'].str.contains(search_service_fmt, na=False))
                     ]
                     
                     if not is_allowed.empty:
@@ -1148,10 +1159,10 @@ if menu_selection == "📦 Vytvoření zásilky":
                     # 2. KROK: Parametry z P0PROPERTIES z CZ
                     st.markdown("#### Fyzické limity a parametry (P0PROPERTIES)")
                     
+                    # Zde hledáme čisté číslo služby (již očištěné od SO v load_georouting_data) a RULETO
                     properties_found = df_p0properties[
-                        (df_p0properties['RULESOCODE'].astype(str) == search_service) & 
-                        (df_p0properties['ZONETO'].str.upper() == search_zone) &
-                        (df_p0properties['RULEFROM'].str.upper() == "CZ")
+                        (df_p0properties['RULESOCODE'] == search_service) & 
+                        (df_p0properties['RULETO'] == search_zone_fmt)
                     ]
                     
                     if not properties_found.empty:
