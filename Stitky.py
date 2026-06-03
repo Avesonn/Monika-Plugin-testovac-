@@ -61,6 +61,11 @@ div[role="radiogroup"] > label div[data-baseweb="radio"] { display: none !import
     background-color: #d4edda !important;
     color: #155724 !important;
 }
+/* Stylování pro zakázané checkboxy */
+.stCheckbox > label[data-baseweb="checkbox"] > div:first-child[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,7 +92,7 @@ COUNTRIES = {
     "Ukrajina": "UA", "Uruguay": "UY", "Vatikán": "VA", "Vietnam": "VN"
 }
 
-# --- MAPOVÁNÍ API SLUŽEB NA GEOROUTING KÓDY ---
+# --- MAPOVÁNÍ API SLUŽEB NA GEOROUTING KÓDY (SOCODE) ---
 SERVICE_GEO_MAPPING = {
     "CLASSIC": "101",
     "PRIVATE": "327",
@@ -102,6 +107,15 @@ SERVICE_GEO_MAPPING = {
     "RETURN": "332",
     "COLLECTION_IMPORT": "XXX", 
     "THIRDPARTY_COLLECTION": "XXX" 
+}
+
+# --- MAPOVÁNÍ DOPLŇKOVÝCH SLUŽEB NA GEOROUTING KÓDY (ASCODE) ---
+# TADY PŘÍPADNĚ UPRAVTE KÓDY DOPLŇKŮ PODLE ASCODE TABULKY V TXT
+ADDON_GEO_MAPPING = {
+    "COD": "A17",        # Dobírka
+    "SWAP": "022",       # Výměnný balík (Změnit dle reálného ASCODE z TXT)
+    "INSURANCE": "V01",  # Připojištění (Změnit dle reálného ASCODE z TXT)
+    "ID_CHECK": "ID1"    # Ověření dokladu (Změnit dle reálného ASCODE z TXT)
 }
 
 # --- BEZPEČNÁ INICIALIZACE SESSION STATE ---
@@ -128,44 +142,71 @@ for key, default_value in session_defaults.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
 
-# --- GEOROUTING LOADER ---
-@st.cache_data(show_spinner="Zpracovávám lokální georouting soubor. To může chvíli trvat...")
+# --- GEOROUTING LOADER S RELAČNÍ LOGIKOU ---
+@st.cache_data(show_spinner="Zpracovávám lokální georouting (Číselníky, ALLOWSO, ALLOWAS, P0PROPERTIES)...")
 def load_georouting_data(file_path):
+    socode_dict = {}
+    ascode_dict = {}
     allowso_list = []
+    allowas_list = []
     p0_list = []
     
     if not os.path.exists(file_path):
-        return pd.DataFrame(), pd.DataFrame()
+        return {}, {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
         for line in file:
-            if line.startswith("ALLOWSO;"):
+            # 1. Číselníky Hlavních služeb
+            if line.startswith("SOCODE;"):
                 parts = line.strip().split(';')
-                if len(parts) >= 5:
+                if len(parts) >= 3:
+                    socode_dict[parts[1].strip()] = parts[2].strip()
+                    
+            # 2. Číselníky Doplňkových služeb
+            elif line.startswith("ASCODE;"):
+                parts = line.strip().split(';')
+                if len(parts) >= 3:
+                    ascode_dict[parts[1].strip()] = parts[2].strip()
+                    
+            # 3. Dostupnost Hlavních služeb z B002 s UNIQUEALLOWID
+            elif line.startswith("ALLOWSO;"):
+                parts = line.strip().split(';')
+                if len(parts) >= 6:
                     allowso_list.append({
-                        "RULEFROM": parts[1].strip(),   # Dle ukázky zde bude B002
-                        "RULESERVICE": parts[2].strip(),# Např. SO101,SO105
-                        "RULETO": parts[3].strip()      # Např. CSK (nikoliv index 4 ZONETO)
+                        "RULEFROM": parts[1].strip(),
+                        "RULESERVICE": parts[2].strip(),
+                        "RULETO": parts[3].strip(),
+                        "UNIQUEALLOWID": parts[5].strip()
                     })
+                    
+            # 4. Dostupnost Doplňků navázaná na UNIQUEALLOWID
+            elif line.startswith("ALLOWAS;"):
+                parts = line.strip().split(';')
+                if len(parts) >= 3:
+                    allowas_list.append({
+                        "UNIQUEALLOWID": parts[1].strip(),
+                        "RULESERVICE": parts[2].strip()
+                    })
+                    
+            # 5. Fyzické limity a restrikce
             elif line.startswith("P0PROPERTIES;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 11:
                     p0_list.append({
-                        "RULEFROM": parts[2].strip(),   # Bude prázdné
-                        # Očistíme případné "SO" pro čistou identifikaci kódu
                         "RULESOCODE": parts[3].strip().replace("SO", ""), 
-                        "RULETO": parts[6].strip(),     # Např. CCH (index 6, nikoliv 7 ZONETO)
+                        "RULETO": parts[6].strip(),
                         "PROPERTY": parts[9].strip(),
                         "VALUE": parts[10].strip()
                     })
                     
-    df_allow = pd.DataFrame(allowso_list)
+    df_allowso = pd.DataFrame(allowso_list)
+    df_allowas = pd.DataFrame(allowas_list)
     df_p0 = pd.DataFrame(p0_list)
-    return df_allow, df_p0
+    return socode_dict, ascode_dict, df_allowso, df_allowas, df_p0
 
 # Načtení dat při startu aplikace
 GEOROUTING_FILE = "georouting.txt"
-df_allowso, df_p0properties = load_georouting_data(GEOROUTING_FILE)
+socode_dict, ascode_dict, df_allowso, df_allowas, df_p0properties = load_georouting_data(GEOROUTING_FILE)
 
 # --- POMOCNÉ FUNKCE ---
 def safe_response_parse(response):
@@ -301,7 +342,7 @@ st.sidebar.markdown("---")
 if df_allowso.empty:
     st.sidebar.warning("⚠️ Georouting soubor nebyl nalezen. Filtry služeb jsou vypnuté.")
 else:
-    msg = f"✅ Georouting aktivní ({len(df_allowso)} povolených směrů)"
+    msg = f"✅ Relační Georouting načten\n({len(df_allowso)} směrů, {len(df_allowas)} vazeb doplňků)"
     st.sidebar.success(msg)
 
 st.sidebar.markdown("### 🛠️ Vývojářské nástroje")
@@ -422,62 +463,76 @@ if menu_selection == "📦 Vytvoření zásilky":
         }
         
         available_services = {}
-        # Dle dat z txt: Cílová zóna začíná písmenem 'C' (např. CDE, CSK)
         target_ruleto = "C" + dest_country_code.upper()
         
+        # RELAČNÍ KROK 1: Vyhledání ALLOWSO řádku pro daný směr
+        allowed_so_str = ""
+        current_unique_allow_id = None
+        
+        if not df_allowso.empty:
+            allowso_match = df_allowso[
+                (df_allowso['RULEFROM'] == 'B002') & 
+                (df_allowso['RULETO'] == target_ruleto)
+            ]
+            if not allowso_match.empty:
+                # Získáme string služeb a klíčové ID z prvního matchujícího řádku
+                allowed_so_str = allowso_match.iloc[0]['RULESERVICE']
+                current_unique_allow_id = allowso_match.iloc[0]['UNIQUEALLOWID']
+        
+        # Filtrování hlavních služeb
         for service_key, service_label in all_service_options.items():
             geo_code = SERVICE_GEO_MAPPING.get(service_key, "XXX")
             
-            if df_allowso.empty:
-                # Pokud georouting chybí, nepovolíme žádnou službu kromě těch, které by mohly být natvrdo
-                pass
-            elif geo_code == "XXX":
-                pass
+            if df_allowso.empty or geo_code == "XXX":
+                available_services[service_key] = service_label
             else:
-                # V souboru je RULESERVICE zapsána např. jako "SO101,SO105"
                 target_service_str = "SO" + geo_code
-                
-                is_allowed = df_allowso[
-                    (df_allowso['RULEFROM'] == 'B002') & 
-                    (df_allowso['RULETO'] == target_ruleto) &
-                    (df_allowso['RULESERVICE'].str.contains(target_service_str, na=False))
-                ]
-                if not is_allowed.empty:
-                    available_services[service_key] = service_label
+                # Striktní kontrola přes seznam
+                allowed_so_list = allowed_so_str.split(',')
+                if target_service_str in allowed_so_list:
+                    # Pokud existuje název z číselníku, vypíšeme ho pro Moniku
+                    real_name = socode_dict.get(geo_code, service_label)
+                    available_services[service_key] = f"{service_label} (Geocode: {geo_code})"
         
         if not available_services:
-            st.error("Dle nahraného georoutingu není pro vybranou cílovou zemi z CZ dostupná žádná služba.")
+            st.error("Dle nahraného georoutingu není pro vybranou cílovou zemi z ČR dostupná žádná služba.")
             st.stop()
             
         service_type = st.radio("Dostupné produkty pro vybraný stát:", options=list(available_services.keys()), format_func=lambda x: available_services[x], horizontal=True)
-        
         current_geo_code = SERVICE_GEO_MAPPING.get(service_type, "XXX")
+        
+        # RELAČNÍ KROK 2: Vytažení povolených doplňků z ALLOWAS přes získané UNIQUEALLOWID
+        allowed_as_str = ""
+        if current_unique_allow_id is not None and not df_allowas.empty:
+            allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'] == current_unique_allow_id]
+            if not allowas_match.empty:
+                allowed_as_str = allowas_match.iloc[0]['RULESERVICE']
+        
+        allowed_as_list = allowed_as_str.split(',') if allowed_as_str else []
+        
+        # Funkce pro kontrolu zamčení checkboxu
+        def is_addon_enabled(addon_type):
+            if df_allowso.empty: return True # Fallback pokud nemáme soubor
+            req_code = ADDON_GEO_MAPPING.get(addon_type)
+            if req_code in allowed_as_list:
+                return True
+            return False
+
+        # Zobrazení restrikcí P0PROPERTIES pro zvolenou službu
         if not df_p0properties.empty and current_geo_code != "XXX":
-            # Pro parametry P0PROPERTIES: Odesílatel (RULEFROM) je prázdný, hledáme jen RULETO a kód služby
             props = df_p0properties[
                 (df_p0properties['RULESOCODE'] == current_geo_code) & 
                 (df_p0properties['RULETO'] == target_ruleto)
             ]
             if not props.empty:
-                st.markdown(f"**Fyzické limity a parametry (Georouting kód {current_geo_code}):**")
+                st.markdown(f"**Fyzické limity a parametry pro službu {current_geo_code}:**")
                 display_df = props[['PROPERTY', 'VALUE']].reset_index(drop=True)
                 st.dataframe(display_df, use_container_width=True)
         
         # Logika toků dat
-        if service_type in ["RETURN", "COLLECTION_IMPORT"]:
-            is_reverse_flow = True
-        else:
-            is_reverse_flow = False
-            
-        if service_type == "THIRDPARTY_COLLECTION":
-            is_third_party_flow = True
-        else:
-            is_third_party_flow = False
-            
-        if not is_reverse_flow and not is_third_party_flow:
-            is_normal_flow = True
-        else:
-            is_normal_flow = False
+        is_reverse_flow = service_type in ["RETURN", "COLLECTION_IMPORT"]
+        is_third_party_flow = service_type == "THIRDPARTY_COLLECTION"
+        is_normal_flow = not is_reverse_flow and not is_third_party_flow
         
         if is_reverse_flow:
             st.info("🔄 **Obrácený tok:** Adresa zákazníka vlevo bude použita jako místo **Vyzvednutí**. Balík pojede k vám.")
@@ -495,19 +550,20 @@ if menu_selection == "📦 Vytvoření zásilky":
             return_mode = st.radio("Režim vratky:", options=["LABEL", "DROP_OFF_CODE"], format_func=lambda x: "🖨️ Papírový štítek (PDF)" if x == "LABEL" else "📱 Bezštítkové podání (PIN + Aztec)", horizontal=True)
 
         st.markdown("<hr>", unsafe_allow_html=True)
-        st.markdown("### Doplňkové parametry")
+        st.markdown("### Doplňkové parametry (Dle ALLOWAS)")
         
         col_srv1, col_srv2, col_srv3 = st.columns(3)
         with col_srv1: 
-            cod_enabled = st.checkbox("💸 Dobírka (COD)")
+            # Aplikace striktního filtru disabled
+            cod_enabled = st.checkbox("💸 Dobírka (COD)", disabled=not is_addon_enabled("COD"))
             
         with col_srv2: 
-            swap_enabled = st.checkbox("🔄 Výměnný balík")
+            swap_enabled = st.checkbox("🔄 Výměnný balík", disabled=not is_addon_enabled("SWAP"))
                 
         with col_srv3: 
-            ins_enabled = st.checkbox("🛡️ Připojištění")
+            ins_enabled = st.checkbox("🛡️ Připojištění", disabled=not is_addon_enabled("INSURANCE"))
             
-        id_check = st.checkbox("👤 Ověření dokladu (ID Check)")
+        id_check = st.checkbox("👤 Ověření dokladu (ID Check)", disabled=not is_addon_enabled("ID_CHECK"))
         
         cod_amount = 0.0
         cod_vs = ""
@@ -1152,14 +1208,23 @@ if menu_selection == "📦 Vytvoření zásilky":
                     ]
                     
                     if not is_allowed.empty:
-                        st.success(f"✅ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** je POVOLENÁ (nalezena v ALLOWSO).")
+                        real_name = socode_dict.get(search_service, "Neznámý název")
+                        st.success(f"✅ Služba **{search_service} ({real_name})** odesílaná z CZ do zóny **{search_zone}** je POVOLENÁ (nalezena v ALLOWSO).")
+                        
+                        unique_id_found = is_allowed.iloc[0]['UNIQUEALLOWID']
+                        # 1b. Zjištění povolených doplňků přes ALLOWAS
+                        addons = df_allowas[df_allowas['UNIQUEALLOWID'] == unique_id_found]
+                        if not addons.empty:
+                            addon_str = addons.iloc[0]['RULESERVICE']
+                            st.info(f"**Povolené doplňky (ASCODE) pro ID {unique_id_found}:** {addon_str}")
+                        else:
+                            st.warning("K této službě nejsou povoleny žádné doplňky (ALLOWAS prázdné).")
                     else:
                         st.error(f"❌ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** NEBYLA NALEZENA v ALLOWSO. Zásilka s největší pravděpodobností neprojde.")
                         
                     # 2. KROK: Parametry z P0PROPERTIES z CZ
                     st.markdown("#### Fyzické limity a parametry (P0PROPERTIES)")
                     
-                    # Zde hledáme čisté číslo služby (již očištěné od SO v load_georouting_data) a RULETO
                     properties_found = df_p0properties[
                         (df_p0properties['RULESOCODE'] == search_service) & 
                         (df_p0properties['RULETO'] == search_zone_fmt)
