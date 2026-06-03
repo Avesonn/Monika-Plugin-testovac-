@@ -302,7 +302,8 @@ st.sidebar.markdown("---")
 if df_allowso.empty:
     st.sidebar.warning("⚠️ Georouting soubor nebyl nalezen. Filtry služeb jsou vypnuté.")
 else:
-    st.sidebar.success(f"✅ Georouting aktivní\n({len(df_allowso)} povolených směrů)")
+    st.sidebar.success(f"✅ Georouting aktivní
+({len(df_allowso)} povolených směrů)")
 
 st.sidebar.markdown("### 🛠️ Vývojářské nástroje")
 mock_parcel_num = st.sidebar.text_input("Zadejte vlastní číslo zásilky:")
@@ -426,9 +427,13 @@ if menu_selection == "📦 Vytvoření zásilky":
         for service_key, service_label in all_service_options.items():
             geo_code = SERVICE_GEO_MAPPING.get(service_key, "XXX")
             
-            if df_allowso.empty or geo_code == "XXX":
-                # Pokud georouting chybí nebo neznáme přesný kód, službu pro jistotu povolíme
-                available_services[service_key] = service_label
+            if df_allowso.empty:
+                # Pokud georouting chybí, nepovolíme žádnou službu kromě těch, které by mohly být natvrdo
+                pass
+            elif geo_code == "XXX":
+                # Pokud služba nemá známý kód, prozatím ji nepovolíme (striktní mód)
+                # available_services[service_key] = service_label + " (Neprošlo Geo)" # Volitelně můžeme přidat označení
+                pass
             else:
                 # Kontrola, zda existuje povolení odeslat tento kód z CZ do vybraného státu
                 is_allowed = df_allowso[
@@ -555,6 +560,7 @@ if menu_selection == "📦 Vytvoření zásilky":
     # --- ODESLÁNÍ DO API ---
     if st.button("🚀 Odeslat a vytvořit zásilku v DPD", type="primary", use_container_width=True):
         
+        # Vyčištění předchozích session proměnných
         st.session_state.pdf_bytes = None
         st.session_state.parcel_number = ""
         st.session_state.dropoff_pin = ""
@@ -568,6 +574,7 @@ if menu_selection == "📦 Vytvoření zásilky":
             st.error("Musíte vyplnit ID výdejního místa z mapy!")
             st.stop()
             
+        # Určení měny
         currency = "EUR"
         if dest_country_code == "CZ": 
             currency = "CZK"
@@ -576,6 +583,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         elif dest_country_code == "RO": 
             currency = "RON"
 
+        # Typ shipmentu
         current_shipment_type = "Standard"
         if service_type == "RETURN": 
             current_shipment_type = "Return"
@@ -623,7 +631,7 @@ if menu_selection == "📦 Vytvoření zásilky":
             "references": {
                 "ref1": ref_shipment
             }, 
-            "parcels": parcels_list, 
+            "parels": parcels_list, 
             "services": {}
         }]
         
