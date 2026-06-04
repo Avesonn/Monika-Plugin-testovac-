@@ -104,14 +104,24 @@ for key, default_value in session_defaults.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
 
-# --- NAČTENÍ ČISTÉHO JSON S PRAVIDLY ---
+# --- NAČTENÍ ČISTÉHO JSON S PRAVIDLY (S ABSOLUTNÍ CESTOU) ---
 @st.cache_data(show_spinner="Načítám pravidla ze souboru pravidla.json...")
 def load_json_rules():
-    file_path = "pravidla.json"
+    # Získání absolutní cesty do složky, kde leží tento skript
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, "pravidla.json")
+    
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {}
+    else:
+        # Píše do konzole pro snazší debugování na cloudu
+        print(f"Chyba: Soubor nenalezen na cestě {file_path}")
+        try:
+            print("Viditelné soubory ve složce:", os.listdir(base_dir))
+        except Exception:
+            pass
+        return {}
 
 georouting_data = load_json_rules()
 
@@ -430,7 +440,6 @@ if menu_selection == "📦 Vytvoření zásilky":
         elif service_type == "SHOP_TO_HOME": serv_obj["shopToHome"] = True
         elif service_type == "RETURN": serv_obj["dpdReturn"] = True
 
-        # PŘIDÁVÁNÍ DO PAYLOADU NA ZÁKLADĚ CHECKBOXŮ
         if swap_enabled: serv_obj["swap"] = True
         if cod_enabled:
             serv_obj["cashOnDelivery"] = {"amountCents": int(float(cod_amount) * 100), "currency": currency, "payment": "CashOrCard"}
