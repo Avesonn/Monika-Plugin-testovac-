@@ -112,9 +112,9 @@ SERVICE_GEO_MAPPING = {
 # --- MAPOVÁNÍ DOPLŇKOVÝCH SLUŽEB NA GEOROUTING KÓDY (ASCODE) ---
 ADDON_GEO_MAPPING = {
     "COD": "A17",        # Dobírka
-    "SWAP": "022",       # Výměnný balík (Změnit dle reálného ASCODE z TXT)
-    "INSURANCE": "V01",  # Připojištění (Změnit dle reálného ASCODE z TXT)
-    "ID_CHECK": "ID1"    # Ověření dokladu (Změnit dle reálného ASCODE z TXT)
+    "SWAP": "022",       # Výměnný balík
+    "INSURANCE": "V01",  # Připojištění
+    "ID_CHECK": "ID1"    # Ověření dokladu
 }
 
 # --- BEZPEČNÁ INICIALIZACE SESSION STATE ---
@@ -242,7 +242,6 @@ def get_human_error_message(err_data):
     elif "Could not get routing data" in err_str:
         return "Could not get routing data - Je zvolená neplatná kombinace služeb, DPD tuto službu do dané země v API neposkytuje."
     elif "Invalid service combination detected" in err_str:
-        # Vytáhneme přímo ten konkrétní důvod z hlášky API
         match = re.search(r"Invalid service combination detected:\s*(.*?)\.", err_str)
         bad_combo = match.group(1) if match else "Neznámá"
         return f"Pokusili jste se odeslat nepovolenou kombinaci doplňkových služeb: [{bad_combo}]. Zkontrolujte zaškrtnuté doplňky (např. Ověření dokladu nelze u služby Pickup)."
@@ -477,24 +476,24 @@ if menu_selection == "📦 Vytvoření zásilky":
                 (df_allowso['RULETO'] == target_ruleto)
             ]
             if not allowso_match.empty:
-                # Získáme string služeb a klíčové ID z prvního matchujícího řádku
                 allowed_so_str = allowso_match.iloc[0]['RULESERVICE']
                 current_unique_allow_id = allowso_match.iloc[0]['UNIQUEALLOWID']
         
+        allowed_so_list = allowed_so_str.split(',') if allowed_so_str else []
+
         # Filtrování hlavních služeb
         for service_key, service_label in all_service_options.items():
             geo_code = SERVICE_GEO_MAPPING.get(service_key, "XXX")
             
-            if df_allowso.empty or geo_code == "XXX":
+            if df_allowso.empty:
                 available_services[service_key] = service_label
             else:
-                target_service_str = "SO" + geo_code
-                # Striktní kontrola přes seznam
-                allowed_so_list = allowed_so_str.split(',')
-                if target_service_str in allowed_so_list:
-                    # Pokud existuje název z číselníku, vypíšeme ho pro Moniku
-                    real_name = socode_dict.get(geo_code, service_label)
-                    available_services[service_key] = f"{service_label} (Geocode: {geo_code})"
+                # STRIKTNÍ BLOK: Zobrazí se jen to, co známe a co v listu reálně je
+                if geo_code != "XXX":
+                    target_service_str = "SO" + geo_code
+                    if target_service_str in allowed_so_list:
+                        real_name = socode_dict.get(geo_code, service_label)
+                        available_services[service_key] = f"{service_label}"
         
         if not available_services:
             st.error("Dle nahraného georoutingu není pro vybranou cílovou zemi z ČR dostupná žádná služba.")
@@ -506,9 +505,10 @@ if menu_selection == "📦 Vytvoření zásilky":
         # RELAČNÍ KROK 2: Vytažení povolených doplňků z ALLOWAS přes získané UNIQUEALLOWID
         allowed_as_str = ""
         if current_unique_allow_id is not None and not df_allowas.empty:
-            allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'] == current_unique_allow_id]
+            allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(current_unique_allow_id)]
             if not allowas_match.empty:
-                allowed_as_str = allowas_match.iloc[0]['RULESERVICE']
+                # Spojení všech případných řádků pro jistotu
+                allowed_as_str = ",".join(allowas_match['RULESERVICE'].dropna().astype(str))
         
         allowed_as_list = allowed_as_str.split(',') if allowed_as_str else []
         
@@ -1216,7 +1216,7 @@ if menu_selection == "📦 Vytvoření zásilky":
                         
                         unique_id_found = is_allowed.iloc[0]['UNIQUEALLOWID']
                         # 1b. Zjištění povolených doplňků přes ALLOWAS
-                        addons = df_allowas[df_allowas['UNIQUEALLOWID'] == unique_id_found]
+                        addons = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(unique_id_found)]
                         if not addons.empty:
                             addon_str = addons.iloc[0]['RULESERVICE']
                             st.info(f"**Povolené doplňky (ASCODE) pro ID {unique_id_found}:** {addon_str}")
