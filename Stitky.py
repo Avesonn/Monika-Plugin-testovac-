@@ -161,12 +161,13 @@ SERVICE_MAPPING = {
     }
 }
 
-# --- MAPOVÁNÍ MĚKKÝCH DOPLŇKŮ (ASCODE) ---
+# --- MAPOVÁNÍ MĚKKÝCH DOPLŇKŮ PŘESNĚ DLE EXPORTU V2 ---
 ADDON_GEO_MAPPING = {
-    "COD": "A17",        # Běžná dobírka
-    "COD_SHOP": "B42",   # Speciální dobírka pro ShopToShop / ShopToHome
-    "INSURANCE": "V01",  # Připojištění
-    "ID_CHECK": "ID1"    # Ověření dokladu
+    "COD": "A17",        # Dobírka
+    "COD_SHOP": "B42",   # Dobírka pro ShopToShop / ShopToHome
+    "SWAP": "A01",       # Výměnný balík
+    "INSURANCE": "XXX",  # Pojištění nemá explicitní kód, proto zůstává trvale povolené
+    "ID_CHECK": "A07"    # Ověření dokladu
 }
 
 # --- BEZPEČNÁ INICIALIZACE SESSION STATE ---
@@ -211,12 +212,10 @@ def load_georouting_data(file_path):
                 parts = line.strip().split(';')
                 if len(parts) >= 3:
                     socode_dict[parts[1].strip()] = parts[2].strip()
-                    
             elif line.startswith("ASCODE;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 3:
                     ascode_dict[parts[1].strip()] = parts[2].strip()
-                    
             elif line.startswith("ALLOWSO;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 6:
@@ -227,7 +226,6 @@ def load_georouting_data(file_path):
                         "ZONETO": parts[4].strip(), 
                         "UNIQUEALLOWID": parts[5].strip()
                     })
-                    
             elif line.startswith("ALLOWAS;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 3:
@@ -235,7 +233,6 @@ def load_georouting_data(file_path):
                         "UNIQUEALLOWID": parts[1].strip(),
                         "RULESERVICE": parts[2].strip()
                     })
-                    
             elif line.startswith("P0PROPERTIES;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 11:
@@ -254,7 +251,6 @@ def load_georouting_data(file_path):
 
 # Načtení dat při startu aplikace
 GEOROUTING_FILE = "georouting.txt"
-# V případě, že máte soubor "georouting_pro_github_v2.txt", upravte proměnnou níže:
 if os.path.exists("georouting_pro_github_v2.txt"):
     GEOROUTING_FILE = "georouting_pro_github_v2.txt"
 
@@ -520,19 +516,25 @@ if menu_selection == "📦 Vytvoření zásilky":
         available_services = {}
         target_ruleto = "C" + dest_country_code.upper()
         
-        # RELAČNÍ KROK 1: Vyhledání ALLOWSO plošného řádku (ZONETO == "") pro daný směr
+        # 1. KROK: Najdi VŠECHNY ALLOWSO řádky pro vybraný stát a chytře vyber Zónu
         allowed_so_str = ""
-        current_unique_allow_id = None
+        all_unique_ids = []
         
         if not df_allowso.empty:
             allowso_match = df_allowso[
                 (df_allowso['RULEFROM'] == 'B002') & 
-                (df_allowso['RULETO'] == target_ruleto) &
-                (df_allowso['ZONETO'] == "") 
+                (df_allowso['RULETO'] == target_ruleto)
             ]
             if not allowso_match.empty:
-                allowed_so_str = allowso_match.iloc[0]['RULESERVICE']
-                current_unique_allow_id = allowso_match.iloc[0]['UNIQUEALLOWID']
+                nationwide = allowso_match[allowso_match['ZONETO'] == ""]
+                if not nationwide.empty:
+                    # OPRAVA: Nesmíme vzít jen první řádek, musíme spojit VŠECHNY řádky pro daný stát!
+                    allowed_so_str = ",".join(nationwide['RULESERVICE'].dropna().astype(str))
+                    all_unique_ids = nationwide['UNIQUEALLOWID'].dropna().astype(str).tolist()
+                else:
+                    # Pokud neexistuje plošná zóna, spojíme všechny dostupné regionální zóny
+                    allowed_so_str = ",".join(allowso_match['RULESERVICE'].dropna().astype(str))
+                    all_unique_ids = allowso_match['UNIQUEALLOWID'].dropna().astype(str).tolist()
         
         # Očištění o "SO" pro snazší porovnávání
         allowed_so_codes = [x.replace("SO", "") for x in allowed_so_str.split(',')] if allowed_so_str else []
@@ -544,9 +546,14 @@ if menu_selection == "📦 Vytvoření zásilky":
             if df_allowso.empty:
                 available_services[service_key] = service_label
             else:
-                if base_code != "XXX":
-                    if base_code in allowed_so_codes:
-                        available_services[service_key] = service_label
+                if base_code == "XXX":
+                    # Služby bez kódu (interní svozy atd.) propouštíme vždy
+                    available_services[service_key] = service_label
+                elif base_code in allowed_so_codes:
+                    # Blokování DPD12/DPD18 pro země mimo CZ/SK
+                    if service_key in ["DPD12", "DPD18"] and dest_country_code not in ["CZ", "SK"]:
+                        continue
+                    available_services[service_key] = service_label
         
         if not available_services:
             st.error("Dle nahraného georoutingu není pro vybranou cílovou zemi z ČR dostupná žádná služba.")
@@ -560,10 +567,11 @@ if menu_selection == "📦 Vytvoření zásilky":
         hard_cod_code = active_mapping.get("with_cod")
         hard_swap_code = active_mapping.get("with_swap")
 
-        # RELAČNÍ KROK 2: Vytažení MĚKKÝCH doplňků z ALLOWAS přes získané UNIQUEALLOWID
+        # 2. KROK: Získání měkkých doplňků z ALLOWAS
         allowed_as_str = ""
-        if current_unique_allow_id is not None and not df_allowas.empty:
-            allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(current_unique_allow_id)]
+        if all_unique_ids and not df_allowas.empty:
+            # OPRAVA: Musíme hledat doplňky pro VŠECHNA nalezená unikátní ID, ne jen pro to první
+            allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str).isin(all_unique_ids)]
             if not allowas_match.empty:
                 allowed_as_str = ",".join(allowas_match['RULESERVICE'].dropna().astype(str))
         
@@ -579,6 +587,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         def is_soft_addon_enabled(addon_type):
             if df_allowso.empty: return True
             req_code = ADDON_GEO_MAPPING.get(addon_type)
+            if req_code == "XXX": return True # Např. pojištění vždy povoleno
             if req_code in allowed_as_list: return True
             return False
 
@@ -636,12 +645,13 @@ if menu_selection == "📦 Vytvoření zásilky":
             active_p0_code = hard_swap_code
 
         if not df_p0properties.empty and active_p0_code != "XXX":
+            # OPRAVA: Fyzické limity platí buď pro konkrétní stát, nebo jsou GLOBÁLNÍ (prázdné RULETO)
             props = df_p0properties[
                 (df_p0properties['RULESOCODE'] == active_p0_code) & 
-                (df_p0properties['RULETO'] == target_ruleto)
+                ((df_p0properties['RULETO'] == target_ruleto) | (df_p0properties['RULETO'] == ""))
             ]
             if not props.empty:
-                st.markdown(f"**Fyzické limity a parametry (Geocode limity pro: {active_p0_code}):**")
+                st.markdown(f"**Fyzické limity a parametry (Pro aktivní kód {active_p0_code}):**")
                 display_df = props[['PROPERTY', 'VALUE']].reset_index(drop=True)
                 st.dataframe(display_df, use_container_width=True)
 
@@ -1277,35 +1287,46 @@ elif menu_selection == "🌍 Georouting (Restrikce)":
                 
                 st.markdown("---")
                 
-                # 1. KROK: Povolení v ALLOWSO z CZ (hledáme plošně s prázdným ZONETO)
+                # OPRAVENÝ 1. KROK: Povolení v ALLOWSO z CZ (hledáme plošně i regionálně)
                 is_allowed = df_allowso[
                     (df_allowso['RULEFROM'] == 'B002') & 
-                    (df_allowso['RULETO'] == search_zone_fmt) &
-                    (df_allowso['ZONETO'] == "") &
-                    (df_allowso['RULESERVICE'].str.contains(search_service_fmt, na=False))
+                    (df_allowso['RULETO'] == search_zone_fmt)
                 ]
                 
                 if not is_allowed.empty:
-                    real_name = socode_dict.get(search_service, "Neznámý název")
-                    st.success(f"✅ Služba **{search_service} ({real_name})** odesílaná z CZ do zóny **{search_zone}** je POVOLENÁ (nalezena v ALLOWSO).")
-                    
-                    unique_id_found = is_allowed.iloc[0]['UNIQUEALLOWID']
-                    # 1b. Zjištění povolených doplňků přes ALLOWAS
-                    addons = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(unique_id_found)]
-                    if not addons.empty:
-                        addon_str = addons.iloc[0]['RULESERVICE']
-                        st.info(f"**Povolené MĚKKÉ doplňky (ASCODE) pro ID {unique_id_found}:** {addon_str}")
+                    nationwide = is_allowed[is_allowed['ZONETO'] == ""]
+                    if not nationwide.empty:
+                        # Hledáme napříč všemi plošnými záznamy
+                        mask = nationwide['RULESERVICE'].str.contains(search_service_fmt, na=False)
+                        valid_rows = nationwide[mask]
                     else:
-                        st.warning("K této službě nejsou povoleny žádné měkké doplňky (ALLOWAS prázdné).")
-                else:
-                    st.error(f"❌ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** NEBYLA NALEZENA v plošném ALLOWSO. Zásilka s největší pravděpodobností neprojde.")
+                        # Pokud není plošné, hledáme napříč regionálními
+                        mask = is_allowed['RULESERVICE'].str.contains(search_service_fmt, na=False)
+                        valid_rows = is_allowed[mask]
                     
-                # 2. KROK: Parametry z P0PROPERTIES z CZ
+                    if not valid_rows.empty:
+                        real_name = socode_dict.get(search_service, "Neznámý název")
+                        st.success(f"✅ Služba **{search_service} ({real_name})** odesílaná z CZ do zóny **{search_zone}** je POVOLENÁ (nalezena v ALLOWSO).")
+                        
+                        # 1b. Zjištění povolených doplňků přes VŠECHNA nalezená ALLOWAS
+                        unique_ids_found = valid_rows['UNIQUEALLOWID'].dropna().astype(str).tolist()
+                        addons = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str).isin(unique_ids_found)]
+                        if not addons.empty:
+                            addon_str = ",".join(addons['RULESERVICE'].dropna().astype(str))
+                            st.info(f"**Povolené MĚKKÉ doplňky (ASCODE) pro odpovídající ID:** {addon_str}")
+                        else:
+                            st.warning("K této službě nejsou povoleny žádné měkké doplňky (ALLOWAS prázdné).")
+                    else:
+                        st.error(f"❌ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** NEBYLA NALEZENA v ALLOWSO. Zásilka s největší pravděpodobností neprojde.")
+                else:
+                    st.error(f"❌ Pro zónu **{search_zone}** nebyl v ALLOWSO nalezen žádný záznam.")
+                    
+                # OPRAVENÝ 2. KROK: Parametry z P0PROPERTIES (Globální i lokální)
                 st.markdown("#### Fyzické limity a parametry (P0PROPERTIES)")
                 
                 properties_found = df_p0properties[
                     (df_p0properties['RULESOCODE'] == search_service) & 
-                    (df_p0properties['RULETO'] == search_zone_fmt)
+                    ((df_p0properties['RULETO'] == search_zone_fmt) | (df_p0properties['RULETO'] == ""))
                 ]
                 
                 if not properties_found.empty:
