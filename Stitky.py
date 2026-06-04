@@ -104,10 +104,9 @@ for key, default_value in session_defaults.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
 
-# --- NAČTENÍ ČISTÉHO JSON S PRAVIDLY (S ABSOLUTNÍ CESTOU) ---
+# --- 1. BLESKOVÉ NAČTENÍ PŘEDPOČÍTANÝCH DAT Z JSONU ---
 @st.cache_data(show_spinner="Načítám pravidla ze souboru pravidla.json...")
-def load_json_rules():
-    # Získání absolutní cesty do složky, kde leží tento skript
+def load_georouting_json():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(base_dir, "pravidla.json")
     
@@ -115,15 +114,10 @@ def load_json_rules():
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
     else:
-        # Píše do konzole pro snazší debugování na cloudu
         print(f"Chyba: Soubor nenalezen na cestě {file_path}")
-        try:
-            print("Viditelné soubory ve složce:", os.listdir(base_dir))
-        except Exception:
-            pass
         return {}
 
-georouting_data = load_json_rules()
+georouting_data = load_georouting_json()
 
 # --- POMOCNÉ FUNKCE ---
 def safe_response_parse(response):
@@ -315,13 +309,14 @@ if menu_selection == "📦 Vytvoření zásilky":
             "THIRDPARTY_COLLECTION": "Svoz třetí straně"
         }
         
-        # JEDNODUCHÉ ČTENÍ Z JSONU
+        # 2. FILTROVÁNÍ SLUŽEB PODLE ZEMĚ (Z JSONU)
         dostupne_sluzby = georouting_data.get(dest_country_code, {})
         
         if not dostupne_sluzby:
             st.error(f"Dle nahraného georoutingu (pravidla.json) není pro cílovou zemi {dest_country_code} dostupná žádná služba.")
             st.stop()
             
+        # 3. VÝBĚR HLAVNÍ SLUŽBY
         service_type = st.radio(
             "Dostupné produkty pro vybraný stát:", 
             options=list(dostupne_sluzby.keys()), 
@@ -350,7 +345,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         st.markdown("<hr>", unsafe_allow_html=True)
         st.markdown("### Doplňkové parametry")
         
-        # ODEMYKÁNÍ DOPLŇKŮ PŘÍMO Z JSON BOOLEANS
+        # 4. DYNAMICKÉ POVOLENÍ DOPLŇKŮ
         info = dostupne_sluzby[service_type]
         
         col_srv1, col_srv2, col_srv3 = st.columns(3)
@@ -359,12 +354,13 @@ if menu_selection == "📦 Vytvoření zásilky":
         with col_srv2: 
             swap_enabled = st.checkbox("🔄 Výměnný balík", disabled=not info.get("swap", False))
         with col_srv3: 
+            # Pokud JSON neobsahuje klíč insurance, defaultně necháme true (záleží na vás)
             ins_enabled = st.checkbox("🛡️ Připojištění", disabled=not info.get("insurance", True))
             
         id_check = st.checkbox("👤 Ověření dokladu (ID Check)", disabled=not info.get("id_check", False))
         
-        # ZOBRAZENÍ LIMITŮ Z JSONU
-        if "limits" in info and info["limits"]:
+        # 5. ZOBRAZENÍ LIMITŮ Z JSONU
+        if info.get("limits"):
             st.markdown(f"**Fyzické limity a parametry:**")
             st.json(info["limits"])
 
@@ -440,6 +436,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         elif service_type == "SHOP_TO_HOME": serv_obj["shopToHome"] = True
         elif service_type == "RETURN": serv_obj["dpdReturn"] = True
 
+        # PŘIDÁVÁNÍ DO PAYLOADU NA ZÁKLADĚ CHECKBOXŮ
         if swap_enabled: serv_obj["swap"] = True
         if cod_enabled:
             serv_obj["cashOnDelivery"] = {"amountCents": int(float(cod_amount) * 100), "currency": currency, "payment": "CashOrCard"}
