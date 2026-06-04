@@ -95,7 +95,9 @@ COUNTRIES = {
 # --- MAPOVÁNÍ API SLUŽEB NA GEOROUTING KÓDY (SOCODE) ---
 SERVICE_GEO_MAPPING = {
     "CLASSIC": "101",
+    "CLASSIC_COD": "109", # Přidáno jako nová hlavní služba
     "PRIVATE": "327",
+    "PRIVATE_COD": "329", # Přidáno jako nová hlavní služba
     "GUARANTEE": "155", 
     "EXPRESS": "302",
     "PNEU": "365",
@@ -175,6 +177,7 @@ def load_georouting_data(file_path):
                         "RULEFROM": parts[1].strip(),
                         "RULESERVICE": parts[2].strip(),
                         "RULETO": parts[3].strip(),
+                        "ZONETO": parts[4].strip(), # NOVĚ PŘIDÁNO PRO FILTRACI PLOŠNÝCH ZÓN
                         "UNIQUEALLOWID": parts[5].strip()
                     })
                     
@@ -449,7 +452,9 @@ if menu_selection == "📦 Vytvoření zásilky":
         
         all_service_options = {
             "CLASSIC": "DPD Classic", 
+            "CLASSIC_COD": "DPD Classic (Dobírka)", 
             "PRIVATE": "DPD Private", 
+            "PRIVATE_COD": "DPD Private (Dobírka)",
             "GUARANTEE": "DPD Guarantee",
             "EXPRESS": "DPD Express (Letecky)", 
             "PNEU": "DPD Pneu", 
@@ -466,14 +471,15 @@ if menu_selection == "📦 Vytvoření zásilky":
         available_services = {}
         target_ruleto = "C" + dest_country_code.upper()
         
-        # RELAČNÍ KROK 1: Vyhledání ALLOWSO řádku pro daný směr
+        # RELAČNÍ KROK 1: Vyhledání ALLOWSO plošného řádku (ZONETO == "") pro daný směr
         allowed_so_str = ""
         current_unique_allow_id = None
         
         if not df_allowso.empty:
             allowso_match = df_allowso[
                 (df_allowso['RULEFROM'] == 'B002') & 
-                (df_allowso['RULETO'] == target_ruleto)
+                (df_allowso['RULETO'] == target_ruleto) &
+                (df_allowso['ZONETO'] == "") # Striktně jen plošné pravidlo pro celou zemi
             ]
             if not allowso_match.empty:
                 allowed_so_str = allowso_match.iloc[0]['RULESERVICE']
@@ -488,11 +494,9 @@ if menu_selection == "📦 Vytvoření zásilky":
             if df_allowso.empty:
                 available_services[service_key] = service_label
             else:
-                # STRIKTNÍ BLOK: Zobrazí se jen to, co známe a co v listu reálně je
                 if geo_code != "XXX":
                     target_service_str = "SO" + geo_code
                     if target_service_str in allowed_so_list:
-                        real_name = socode_dict.get(geo_code, service_label)
                         available_services[service_key] = f"{service_label}"
         
         if not available_services:
@@ -507,7 +511,6 @@ if menu_selection == "📦 Vytvoření zásilky":
         if current_unique_allow_id is not None and not df_allowas.empty:
             allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(current_unique_allow_id)]
             if not allowas_match.empty:
-                # Spojení všech případných řádků pro jistotu
                 allowed_as_str = ",".join(allowas_match['RULESERVICE'].dropna().astype(str))
         
         allowed_as_list = allowed_as_str.split(',') if allowed_as_str else []
@@ -556,7 +559,6 @@ if menu_selection == "📦 Vytvoření zásilky":
         
         col_srv1, col_srv2, col_srv3 = st.columns(3)
         with col_srv1: 
-            # Aplikace striktního filtru disabled
             cod_enabled = st.checkbox("💸 Dobírka (COD)", disabled=not is_addon_enabled("COD"))
             
         with col_srv2: 
@@ -572,6 +574,11 @@ if menu_selection == "📦 Vytvoření zásilky":
         ins_amount = 0.0
         id_name = ""
         id_number = ""
+        
+        # Pokud uživatel vybral službu s "_COD" přímo z hlavního menu, automaticky vynutíme dobírku
+        is_cod_main_service = service_type.endswith("_COD")
+        if is_cod_main_service:
+            cod_enabled = True
         
         if cod_enabled:
             c_cod1, c_cod2 = st.columns(2)
@@ -691,7 +698,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         }]
         
         serv_obj = {}
-        if service_type == "PRIVATE": 
+        if service_type in ["PRIVATE", "PRIVATE_COD"]: 
             serv_obj["notification"] = True
             
         elif service_type == "GUARANTEE": 
@@ -732,7 +739,8 @@ if menu_selection == "📦 Vytvoření zásilky":
         if swap_enabled and is_addon_enabled("SWAP"): 
             serv_obj["swap"] = True
             
-        if cod_enabled and is_addon_enabled("COD"):
+        # Dobírka se přidá buď pokud je zaškrtlá (A17 v ALLOWAS) NEBO pokud byla zvolena jako hlavní služba
+        if cod_enabled and (is_addon_enabled("COD") or is_cod_main_service):
             serv_obj["cashOnDelivery"] = {
                 "amountCents": int(float(cod_amount) * 100), 
                 "currency": currency, 
@@ -771,11 +779,6 @@ if menu_selection == "📦 Vytvoření zásilky":
                         st.error(f"❌ **ZAMÍTNUTO DPD:** {human_msg}")
                     else: 
                         st.error(f"❌ DPD API zamítlo požadavek (HTTP {ship_res.status_code})")
-                        
-                    if isinstance(ship_data, (dict, list)): 
-                        st.json(ship_data)
-                    else: 
-                        st.code(str(ship_data))
                         
                 else:
                     p_number = get_p_num(ship_data)
@@ -1203,10 +1206,11 @@ if menu_selection == "📦 Vytvoření zásilky":
                     
                     st.markdown("---")
                     
-                    # 1. KROK: Povolení v ALLOWSO z CZ
+                    # 1. KROK: Povolení v ALLOWSO z CZ (hledáme plošně s prázdným ZONETO)
                     is_allowed = df_allowso[
                         (df_allowso['RULEFROM'] == 'B002') & 
                         (df_allowso['RULETO'] == search_zone_fmt) &
+                        (df_allowso['ZONETO'] == "") &
                         (df_allowso['RULESERVICE'].str.contains(search_service_fmt, na=False))
                     ]
                     
@@ -1223,7 +1227,7 @@ if menu_selection == "📦 Vytvoření zásilky":
                         else:
                             st.warning("K této službě nejsou povoleny žádné doplňky (ALLOWAS prázdné).")
                     else:
-                        st.error(f"❌ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** NEBYLA NALEZENA v ALLOWSO. Zásilka s největší pravděpodobností neprojde.")
+                        st.error(f"❌ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** NEBYLA NALEZENA v plošném ALLOWSO. Zásilka s největší pravděpodobností neprojde.")
                         
                     # 2. KROK: Parametry z P0PROPERTIES z CZ
                     st.markdown("#### Fyzické limity a parametry (P0PROPERTIES)")
