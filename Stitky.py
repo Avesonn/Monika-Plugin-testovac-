@@ -92,29 +92,78 @@ COUNTRIES = {
     "Ukrajina": "UA", "Uruguay": "UY", "Vatikán": "VA", "Vietnam": "VN"
 }
 
-# --- MAPOVÁNÍ API SLUŽEB NA GEOROUTING KÓDY (SOCODE) ---
-SERVICE_GEO_MAPPING = {
-    "CLASSIC": "101",
-    "CLASSIC_COD": "109", # Přidáno jako nová hlavní služba
-    "PRIVATE": "327",
-    "PRIVATE_COD": "329", # Přidáno jako nová hlavní služba
-    "GUARANTEE": "155", 
-    "EXPRESS": "302",
-    "PNEU": "365",
-    "DPD12": "225",
-    "DPD18": "155",
-    "PICKUP": "337", 
-    "SHOP_TO_SHOP": "345",
-    "SHOP_TO_HOME": "404",
-    "RETURN": "332",
-    "COLLECTION_IMPORT": "XXX", 
-    "THIRDPARTY_COLLECTION": "XXX" 
+# --- MAPOVÁNÍ API SLUŽEB NA TVRDÉ GEOROUTING KÓDY ---
+# Základní služba + kombinované kódy pro tvrdé doplňky
+SERVICE_MAPPING = {
+    "CLASSIC": {
+        "base": "101",
+        "with_cod": "109",
+        "with_swap": "113"
+    },
+    "PRIVATE": {
+        "base": "327",
+        "with_cod": "329",
+        "with_swap": "571"
+    },
+    "DPD18": {
+        "base": "155",
+        "with_cod": "161",
+        "with_swap": "164"
+    },
+    "DPD12": {
+        "base": "225",
+        "with_cod": "237",
+        "with_swap": "243"
+    },
+    "PICKUP": {
+        "base": "337",
+        "with_cod": "341",
+        "with_swap": None
+    },
+    "PNEU": {
+        "base": "365",
+        "with_cod": "367",
+        "with_swap": None
+    },
+    "EXPRESS": {
+        "base": "302",
+        "with_cod": None,
+        "with_swap": None
+    },
+    "SHOP_TO_SHOP": {
+        "base": "345",
+        "with_cod": None,
+        "with_swap": None
+    },
+    "SHOP_TO_HOME": {
+        "base": "404",
+        "with_cod": None,
+        "with_swap": None
+    },
+    "RETURN": {
+        "base": "332",
+        "with_cod": None,
+        "with_swap": None
+    },
+    "GUARANTEE": {
+        "base": "155", # Stejné jako DPD18
+        "with_cod": None,
+        "with_swap": None
+    },
+    "COLLECTION_IMPORT": {
+        "base": "XXX",
+        "with_cod": None,
+        "with_swap": None
+    },
+    "THIRDPARTY_COLLECTION": {
+        "base": "XXX",
+        "with_cod": None,
+        "with_swap": None
+    }
 }
 
-# --- MAPOVÁNÍ DOPLŇKOVÝCH SLUŽEB NA GEOROUTING KÓDY (ASCODE) ---
+# --- MAPOVÁNÍ MĚKKÝCH DOPLŇKŮ (ASCODE) ---
 ADDON_GEO_MAPPING = {
-    "COD": "A17",        # Dobírka
-    "SWAP": "022",       # Výměnný balík
     "INSURANCE": "V01",  # Připojištění
     "ID_CHECK": "ID1"    # Ověření dokladu
 }
@@ -157,19 +206,16 @@ def load_georouting_data(file_path):
 
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
         for line in file:
-            # 1. Číselníky Hlavních služeb
             if line.startswith("SOCODE;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 3:
                     socode_dict[parts[1].strip()] = parts[2].strip()
                     
-            # 2. Číselníky Doplňkových služeb
             elif line.startswith("ASCODE;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 3:
                     ascode_dict[parts[1].strip()] = parts[2].strip()
                     
-            # 3. Dostupnost Hlavních služeb z B002 s UNIQUEALLOWID
             elif line.startswith("ALLOWSO;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 6:
@@ -177,11 +223,10 @@ def load_georouting_data(file_path):
                         "RULEFROM": parts[1].strip(),
                         "RULESERVICE": parts[2].strip(),
                         "RULETO": parts[3].strip(),
-                        "ZONETO": parts[4].strip(), # NOVĚ PŘIDÁNO PRO FILTRACI PLOŠNÝCH ZÓN
+                        "ZONETO": parts[4].strip(), 
                         "UNIQUEALLOWID": parts[5].strip()
                     })
                     
-            # 4. Dostupnost Doplňků navázaná na UNIQUEALLOWID
             elif line.startswith("ALLOWAS;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 3:
@@ -190,7 +235,6 @@ def load_georouting_data(file_path):
                         "RULESERVICE": parts[2].strip()
                     })
                     
-            # 5. Fyzické limity a restrikce
             elif line.startswith("P0PROPERTIES;"):
                 parts = line.strip().split(';')
                 if len(parts) >= 11:
@@ -452,9 +496,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         
         all_service_options = {
             "CLASSIC": "DPD Classic", 
-            "CLASSIC_COD": "DPD Classic (Dobírka)", 
             "PRIVATE": "DPD Private", 
-            "PRIVATE_COD": "DPD Private (Dobírka)",
             "GUARANTEE": "DPD Guarantee",
             "EXPRESS": "DPD Express (Letecky)", 
             "PNEU": "DPD Pneu", 
@@ -479,34 +521,39 @@ if menu_selection == "📦 Vytvoření zásilky":
             allowso_match = df_allowso[
                 (df_allowso['RULEFROM'] == 'B002') & 
                 (df_allowso['RULETO'] == target_ruleto) &
-                (df_allowso['ZONETO'] == "") # Striktně jen plošné pravidlo pro celou zemi
+                (df_allowso['ZONETO'] == "") 
             ]
             if not allowso_match.empty:
                 allowed_so_str = allowso_match.iloc[0]['RULESERVICE']
                 current_unique_allow_id = allowso_match.iloc[0]['UNIQUEALLOWID']
         
-        allowed_so_list = allowed_so_str.split(',') if allowed_so_str else []
+        # Převedeme string "SO101,SO105" na list čistých čísel ["101", "105"]
+        allowed_so_codes = [x.replace("SO", "") for x in allowed_so_str.split(',')] if allowed_so_str else []
 
-        # Filtrování hlavních služeb
+        # Filtrování hlavních služeb zobrazených v UI
         for service_key, service_label in all_service_options.items():
-            geo_code = SERVICE_GEO_MAPPING.get(service_key, "XXX")
+            geo_base_code = SERVICE_MAPPING.get(service_key, {}).get("base", "XXX")
             
             if df_allowso.empty:
                 available_services[service_key] = service_label
             else:
-                if geo_code != "XXX":
-                    target_service_str = "SO" + geo_code
-                    if target_service_str in allowed_so_list:
-                        available_services[service_key] = f"{service_label}"
+                if geo_base_code != "XXX":
+                    if geo_base_code in allowed_so_codes:
+                        available_services[service_key] = service_label
         
         if not available_services:
             st.error("Dle nahraného georoutingu není pro vybranou cílovou zemi z ČR dostupná žádná služba.")
             st.stop()
             
         service_type = st.radio("Dostupné produkty pro vybraný stát:", options=list(available_services.keys()), format_func=lambda x: available_services[x], horizontal=True)
-        current_geo_code = SERVICE_GEO_MAPPING.get(service_type, "XXX")
         
-        # RELAČNÍ KROK 2: Vytažení povolených doplňků z ALLOWAS přes získané UNIQUEALLOWID
+        # Načtení kódů pro aktuálně vybranou službu (base, tvrdá dobírka, tvrdá výměna)
+        active_mapping = SERVICE_MAPPING.get(service_type, {})
+        base_code = active_mapping.get("base", "XXX")
+        hard_cod_code = active_mapping.get("with_cod")
+        hard_swap_code = active_mapping.get("with_swap")
+
+        # RELAČNÍ KROK 2: Vytažení MĚKKÝCH doplňků z ALLOWAS přes získané UNIQUEALLOWID
         allowed_as_str = ""
         if current_unique_allow_id is not None and not df_allowas.empty:
             allowas_match = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(current_unique_allow_id)]
@@ -515,70 +562,60 @@ if menu_selection == "📦 Vytvoření zásilky":
         
         allowed_as_list = allowed_as_str.split(',') if allowed_as_str else []
         
-        # Funkce pro kontrolu zamčení checkboxu
-        def is_addon_enabled(addon_type):
-            if df_allowso.empty: return True # Fallback pokud nemáme soubor
+        # Funkce pro kontrolu zamčení MĚKKÝCH checkboxů (ID check atd.)
+        def is_soft_addon_enabled(addon_type):
+            if df_allowso.empty: return True
             req_code = ADDON_GEO_MAPPING.get(addon_type)
-            if req_code in allowed_as_list:
-                return True
+            if req_code in allowed_as_list: return True
             return False
 
-        # Zobrazení restrikcí P0PROPERTIES pro zvolenou službu
-        if not df_p0properties.empty and current_geo_code != "XXX":
-            props = df_p0properties[
-                (df_p0properties['RULESOCODE'] == current_geo_code) & 
-                (df_p0properties['RULETO'] == target_ruleto)
-            ]
-            if not props.empty:
-                st.markdown(f"**Fyzické limity a parametry pro službu {current_geo_code}:**")
-                display_df = props[['PROPERTY', 'VALUE']].reset_index(drop=True)
-                st.dataframe(display_df, use_container_width=True)
-        
-        # Logika toků dat
-        is_reverse_flow = service_type in ["RETURN", "COLLECTION_IMPORT"]
-        is_third_party_flow = service_type == "THIRDPARTY_COLLECTION"
-        is_normal_flow = not is_reverse_flow and not is_third_party_flow
-        
-        if is_reverse_flow:
-            st.info("🔄 **Obrácený tok:** Adresa zákazníka vlevo bude použita jako místo **Vyzvednutí**. Balík pojede k vám.")
-            
-        manual_receiver_tp = None
-        if is_third_party_flow:
-            st.info("🔄 **Tok třetí stranou:** Zákazník vlevo je Odesílatel. Nyní vyplňte, komu se má balík doručit:")
-            with extra_address_placeholder.container():
-                st.markdown("<hr>", unsafe_allow_html=True)
-                manual_receiver_tp, tp_country_code = render_address_block("rec_tp", "Adresa Příjemce (Třetí strana)")
-                dest_country_code = tp_country_code
-        
-        return_mode = "LABEL"
-        if service_type == "RETURN":
-            return_mode = st.radio("Režim vratky:", options=["LABEL", "DROP_OFF_CODE"], format_func=lambda x: "🖨️ Papírový štítek (PDF)" if x == "LABEL" else "📱 Bezštítkové podání (PIN + Aztec)", horizontal=True)
+        # Funkce pro kontrolu zamčení TVRDÝCH checkboxů (Dobírka, Výměna - hledá se v ALLOWSO)
+        def is_hard_addon_enabled(hard_code):
+            if df_allowso.empty: return True
+            if hard_code and hard_code in allowed_so_codes: return True
+            return False
 
         st.markdown("<hr>", unsafe_allow_html=True)
-        st.markdown("### Doplňkové parametry (Dle ALLOWAS)")
+        st.markdown("### Doplňkové parametry")
         
         col_srv1, col_srv2, col_srv3 = st.columns(3)
         with col_srv1: 
-            cod_enabled = st.checkbox("💸 Dobírka (COD)", disabled=not is_addon_enabled("COD"))
+            # Tvrdý doplněk (kontrolujeme ALLOWSO)
+            cod_enabled = st.checkbox("💸 Dobírka (COD)", disabled=not is_hard_addon_enabled(hard_cod_code))
             
         with col_srv2: 
-            swap_enabled = st.checkbox("🔄 Výměnný balík", disabled=not is_addon_enabled("SWAP"))
+            # Tvrdý doplněk (kontrolujeme ALLOWSO)
+            swap_enabled = st.checkbox("🔄 Výměnný balík", disabled=not is_hard_addon_enabled(hard_swap_code))
                 
         with col_srv3: 
-            ins_enabled = st.checkbox("🛡️ Připojištění", disabled=not is_addon_enabled("INSURANCE"))
+            # Měkký doplněk (kontrolujeme ALLOWAS)
+            ins_enabled = st.checkbox("🛡️ Připojištění", disabled=not is_soft_addon_enabled("INSURANCE"))
             
-        id_check = st.checkbox("👤 Ověření dokladu (ID Check)", disabled=not is_addon_enabled("ID_CHECK"))
+        # Měkký doplněk (kontrolujeme ALLOWAS)
+        id_check = st.checkbox("👤 Ověření dokladu (ID Check)", disabled=not is_soft_addon_enabled("ID_CHECK"))
         
+        # Zobrazení restrikcí P0PROPERTIES (Přepínání kódu dle zaškrtnutých tvrdých doplňků)
+        active_p0_code = base_code
+        if cod_enabled and hard_cod_code:
+            active_p0_code = hard_cod_code
+        elif swap_enabled and hard_swap_code:
+            active_p0_code = hard_swap_code
+
+        if not df_p0properties.empty and active_p0_code != "XXX":
+            props = df_p0properties[
+                (df_p0properties['RULESOCODE'] == active_p0_code) & 
+                (df_p0properties['RULETO'] == target_ruleto)
+            ]
+            if not props.empty:
+                st.markdown(f"**Fyzické limity a parametry (Aktivní Geocode: {active_p0_code}):**")
+                display_df = props[['PROPERTY', 'VALUE']].reset_index(drop=True)
+                st.dataframe(display_df, use_container_width=True)
+
         cod_amount = 0.0
         cod_vs = ""
         ins_amount = 0.0
         id_name = ""
         id_number = ""
-        
-        # Pokud uživatel vybral službu s "_COD" přímo z hlavního menu, automaticky vynutíme dobírku
-        is_cod_main_service = service_type.endswith("_COD")
-        if is_cod_main_service:
-            cod_enabled = True
         
         if cod_enabled:
             c_cod1, c_cod2 = st.columns(2)
@@ -608,6 +645,26 @@ if menu_selection == "📦 Vytvoření zásilky":
         with col_r:
             ref_shipment = st.text_input("Reference zásilky (Shipment):", "SHIP-2026")
             ref_parcel = st.text_input("Reference balíku (Na štítek):", "PARC-001")
+
+        # Logika toků dat
+        is_reverse_flow = service_type in ["RETURN", "COLLECTION_IMPORT"]
+        is_third_party_flow = service_type == "THIRDPARTY_COLLECTION"
+        is_normal_flow = not is_reverse_flow and not is_third_party_flow
+        
+        if is_reverse_flow:
+            st.info("🔄 **Obrácený tok:** Adresa zákazníka vlevo bude použita jako místo **Vyzvednutí**. Balík pojede k vám.")
+            
+        manual_receiver_tp = None
+        if is_third_party_flow:
+            st.info("🔄 **Tok třetí stranou:** Zákazník vlevo je Odesílatel. Nyní vyplňte, komu se má balík doručit:")
+            with extra_address_placeholder.container():
+                st.markdown("<hr>", unsafe_allow_html=True)
+                manual_receiver_tp, tp_country_code = render_address_block("rec_tp", "Adresa Příjemce (Třetí strana)")
+                dest_country_code = tp_country_code
+        
+        return_mode = "LABEL"
+        if service_type == "RETURN":
+            return_mode = st.radio("Režim vratky:", options=["LABEL", "DROP_OFF_CODE"], format_func=lambda x: "🖨️ Papírový štítek (PDF)" if x == "LABEL" else "📱 Bezštítkové podání (PIN + Aztec)", horizontal=True)
 
     # --- KROK 4: SPODNÍ BLOK ---
     st.markdown("<hr style='border: 2px solid #dc0032;'>", unsafe_allow_html=True)
@@ -698,7 +755,7 @@ if menu_selection == "📦 Vytvoření zásilky":
         }]
         
         serv_obj = {}
-        if service_type in ["PRIVATE", "PRIVATE_COD"]: 
+        if service_type == "PRIVATE": 
             serv_obj["notification"] = True
             
         elif service_type == "GUARANTEE": 
@@ -735,12 +792,11 @@ if menu_selection == "📦 Vytvoření zásilky":
         elif service_type == "RETURN": 
             serv_obj["dpdReturn"] = True
 
-        # BEZPEČNÉ VKLÁDÁNÍ DO PAYLOADU PŘES GEOROUTING FILTR
-        if swap_enabled and is_addon_enabled("SWAP"): 
+        # PŘIDÁVÁNÍ DO PAYLOADU (API ZAJÍMÁ SÉMANTIKA, NIKOLIV KÓD 329)
+        if swap_enabled and is_hard_addon_enabled(hard_swap_code): 
             serv_obj["swap"] = True
             
-        # Dobírka se přidá buď pokud je zaškrtlá (A17 v ALLOWAS) NEBO pokud byla zvolena jako hlavní služba
-        if cod_enabled and (is_addon_enabled("COD") or is_cod_main_service):
+        if cod_enabled and is_hard_addon_enabled(hard_cod_code):
             serv_obj["cashOnDelivery"] = {
                 "amountCents": int(float(cod_amount) * 100), 
                 "currency": currency, 
@@ -749,13 +805,13 @@ if menu_selection == "📦 Vytvoření zásilky":
             if cod_vs.strip(): 
                 serv_obj["cashOnDelivery"]["variableSymbol"] = cod_vs.strip()
                 
-        if ins_enabled and is_addon_enabled("INSURANCE"): 
+        if ins_enabled and is_soft_addon_enabled("INSURANCE"): 
             serv_obj["declaredValue"] = {
                 "amountCents": int(float(ins_amount) * 100), 
                 "currency": currency
             }
             
-        if id_check and is_addon_enabled("ID_CHECK"): 
+        if id_check and is_soft_addon_enabled("ID_CHECK"): 
             serv_obj["personalIdentification"] = {
                 "name": id_name, 
                 "personalId": id_number
@@ -1223,9 +1279,9 @@ if menu_selection == "📦 Vytvoření zásilky":
                         addons = df_allowas[df_allowas['UNIQUEALLOWID'].astype(str) == str(unique_id_found)]
                         if not addons.empty:
                             addon_str = addons.iloc[0]['RULESERVICE']
-                            st.info(f"**Povolené doplňky (ASCODE) pro ID {unique_id_found}:** {addon_str}")
+                            st.info(f"**Povolené MĚKKÉ doplňky (ASCODE) pro ID {unique_id_found}:** {addon_str}")
                         else:
-                            st.warning("K této službě nejsou povoleny žádné doplňky (ALLOWAS prázdné).")
+                            st.warning("K této službě nejsou povoleny žádné měkké doplňky (ALLOWAS prázdné).")
                     else:
                         st.error(f"❌ Služba **{search_service}** odesílaná z CZ do zóny **{search_zone}** NEBYLA NALEZENA v plošném ALLOWSO. Zásilka s největší pravděpodobností neprojde.")
                         
